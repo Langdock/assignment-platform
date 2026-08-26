@@ -104,6 +104,15 @@ export default function Home() {
     await loadDocuments();
   }
 
+  async function terminateBackend() {
+    setRequestError("Backend termination requested. Restart it with pnpm dev to continue testing.");
+    try {
+      await fetch("/api/debug/crash", { method: "POST" });
+    } catch {
+      // The request may fail because the endpoint intentionally terminates its own process.
+    }
+  }
+
   const runId = events[0]?.runId;
   const completed = events.find((event) => event.type === "run.completed");
   const failed = events.find((event) => event.type === "run.failed");
@@ -130,7 +139,12 @@ export default function Home() {
       <section className="activity" aria-live="polite">
         <div className="section-heading">
           <div><span className="section-label">Current run</span>{runId && <code>{runId}</code>}</div>
-          <span className={`status status-${statusLabel.toLowerCase()}`}><i aria-hidden="true" />{statusLabel}</span>
+          <div className="run-controls">
+            {process.env.NODE_ENV === "development" && running && (
+              <button className="crash-button" onClick={terminateBackend} type="button">Simulate process crash</button>
+            )}
+            <span className={`status status-${statusLabel.toLowerCase()}`}><i aria-hidden="true" />{statusLabel}</span>
+          </div>
         </div>
         {events.length === 0 ? <div className="quiet-state">Run activity will appear here.</div> : (
           <div className="timeline">

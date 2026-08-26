@@ -87,7 +87,9 @@ Open [http://localhost:3000](http://localhost:3000). A normal run takes approxim
 AGENT_STEP_DELAY_MS=5000 pnpm dev
 ```
 
-To observe the starter's failure mode, begin a run and either refresh the browser or terminate the development server with `Ctrl+C`. After restarting, neither the run nor its progress can be recovered. Documents already created in the simulated external system remain visible because they are written beneath `.runtime/`.
+To observe the starter's failure mode, begin a run and refresh the browser, terminate the development server with `Ctrl+C`, or use the development-only **Simulate process crash** control beside the active run. The crash control intentionally exits the backend process; restart it manually with `pnpm dev`. After restarting, neither the run nor its progress can be recovered. Documents already created in the simulated external system remain visible because they are written beneath `.runtime/`.
+
+The crash endpoint is deliberately unavailable when `NODE_ENV=production`. It is local failure-injection tooling, not an application feature.
 
 The starter architecture is described in [`docs/STARTER_ARCHITECTURE.md`](./docs/STARTER_ARCHITECTURE.md).
 

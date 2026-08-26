@@ -42,6 +42,9 @@ h1 { font-size: clamp(28px, 5vw, 36px); font-weight: 520; letter-spacing: -.035e
 .section-label { color: var(--secondary); display: block; font-size: 12px; font-weight: 550; }
 .section-heading code { color: var(--muted); display: block; font-size: 10px; margin-top: 5px; }
 .section-heading p { color: var(--muted); font-size: 11px; line-height: 1.5; margin: 5px 0 0; }
+.run-controls { align-items: center; display: flex; gap: 14px; }
+.crash-button { background: none; border: 0; color: var(--red); font-size: 10px; padding: 0; }
+.crash-button:hover { color: #ffb0b0; }
 .status { align-items: center; color: var(--muted); display: inline-flex; font-size: 11px; gap: 6px; }
 .status i { background: var(--muted); border-radius: 50%; height: 6px; width: 6px; }
 .status-running { color: #9cadff; }
