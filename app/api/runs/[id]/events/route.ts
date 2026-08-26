@@ -5,8 +5,8 @@ import type { AgentEvent } from "@/lib/types";
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
 
-function serialize(event: AgentEvent): Uint8Array {
-  return new TextEncoder().encode(`id: ${event.id}\ndata: ${JSON.stringify(event)}\n\n`);
+function serialize(event: AgentEvent): string {
+  return `id: ${event.id}\ndata: ${JSON.stringify(event)}\n\n`;
 }
 
 function eventsAfter(events: AgentEvent[], lastEventId: string | null): AgentEvent[] {
@@ -45,11 +45,18 @@ export async function GET(
         }
       };
 
-      const send = (event: AgentEvent) => {
-        if (!closed) {
-          controller.enqueue(serialize(event));
+      const sendRaw = (chunk: string) => {
+        if (closed || request.signal.aborted) {
+          return;
+        }
+        try {
+          controller.enqueue(encoder.encode(chunk));
+        } catch {
+          closed = true;
         }
       };
+
+      sendRaw(": connected\n\n");
 
       void (async () => {
         let cursor = lastEventId;
@@ -62,7 +69,7 @@ export async function GET(
 
           const nextEvents = eventsAfter(run.events, cursor);
           for (const event of nextEvents) {
-            send(event);
+            sendRaw(serialize(event));
             cursor = event.id;
           }
 
@@ -82,7 +89,6 @@ export async function GET(
       });
 
       request.signal.addEventListener("abort", close, { once: true });
-      controller.enqueue(encoder.encode(": connected\n\n"));
     },
   });
 

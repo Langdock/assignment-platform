@@ -52,6 +52,15 @@ function mergeEvents(current: AgentEvent[], incoming: AgentEvent[]): AgentEvent[
   return [...byId.values()];
 }
 
+function pickRunToShow(listed: RunSummary[], storedId: string | null): RunSummary | undefined {
+  const stored = listed.find((run) => run.id === storedId);
+  const inFlight = listed.find((run) => run.status === "running" || run.status === "queued");
+  if (stored && (stored.status === "running" || stored.status === "queued")) {
+    return stored;
+  }
+  return inFlight ?? stored ?? listed[0];
+}
+
 export default function Home() {
   const [prompt, setPrompt] = useState(defaultPrompt);
   const [events, setEvents] = useState<AgentEvent[]>([]);
@@ -101,6 +110,9 @@ export default function Home() {
         void loadDocuments();
         void loadRuns();
       }
+      if (event.type === "run.completed" || event.type === "run.failed") {
+        source.close();
+      }
     };
     source.onerror = () => setConnected(false);
   }, [loadDocuments, loadRuns]);
@@ -127,7 +139,7 @@ export default function Home() {
       await loadDocuments();
       const listed = await loadRuns();
       const storedId = localStorage.getItem(activeRunStorageKey);
-      const active = listed.find((run) => run.id === storedId) ?? listed.find((run) => run.status === "running" || run.status === "queued") ?? listed[0];
+      const active = pickRunToShow(listed, storedId);
       if (active) {
         await selectRun(active.id);
       }
@@ -144,6 +156,35 @@ export default function Home() {
       eventSourceRef.current?.close();
     };
   }, [loadDocuments, loadRuns, selectRun]);
+
+  useEffect(() => {
+    if (!selectedRunId) {
+      return;
+    }
+
+    let cancelled = false;
+    const tick = async () => {
+      const response = await fetch(`/api/runs/${selectedRunId}`, { cache: "no-store" });
+      if (!response.ok || cancelled) {
+        return;
+      }
+      const body = (await response.json()) as { run: RunRecord };
+      setSelectedRun(body.run);
+      setEvents((current) => mergeEvents(current, body.run.events));
+      if (body.run.status === "completed" || body.run.status === "failed") {
+        void loadDocuments();
+        void loadRuns();
+      }
+    };
+
+    const interval = setInterval(() => {
+      void tick();
+    }, 1000);
+    return () => {
+      cancelled = true;
+      clearInterval(interval);
+    };
+  }, [selectedRunId, loadDocuments, loadRuns]);
 
   async function startRun(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
