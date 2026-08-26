@@ -1,10 +1,7 @@
 import { createDocument } from "@/lib/fake-external-service";
-import type { AgentEvent } from "@/lib/types";
-
-type Emit = (event: AgentEvent) => void;
-
-const stepDelay = Number(process.env.AGENT_STEP_DELAY_MS ?? 2_500);
-const stepTransitionDelay = Number(process.env.AGENT_STEP_TRANSITION_DELAY_MS ?? 600);
+import { AGENT_STEPS, documentIdempotencyKey, stepDelayMs, stepTransitionDelayMs } from "@/lib/steps";
+import { appendEvent, getRun, updateRun } from "@/lib/store";
+import type { AgentEvent, RunRecord, StepRecord } from "@/lib/types";
 
 function occurredAt(): string {
   return new Date().toISOString();
@@ -29,104 +26,176 @@ function delay(milliseconds: number, signal: AbortSignal): Promise<void> {
   });
 }
 
+function isAbortError(error: unknown): boolean {
+  return (
+    (error instanceof Error && error.name === "AbortError") ||
+    (typeof DOMException !== "undefined" && error instanceof DOMException && error.name === "AbortError")
+  );
+}
+
+function firstIncompleteStep(run: RunRecord): StepRecord | undefined {
+  return run.steps.find((step) => step.status !== "completed");
+}
+
+async function emit(event: AgentEvent): Promise<void> {
+  await appendEvent(event.runId, event);
+}
+
 async function executeStep(input: {
   runId: string;
-  number: number;
-  title: string;
+  prompt: string;
+  step: StepRecord;
   signal: AbortSignal;
-  emit: Emit;
-  operation?: () => Promise<string | undefined>;
 }): Promise<void> {
-  input.emit({
+  const attempt = input.step.attempt + 1;
+  await updateRun(input.runId, (run) => {
+    const step = run.steps.find((candidate) => candidate.number === input.step.number);
+    if (!step) {
+      throw new Error(`Step ${input.step.number} is missing`);
+    }
+    step.status = "running";
+    step.attempt = attempt;
+    step.startedAt ??= occurredAt();
+  });
+
+  await emit({
+    id: crypto.randomUUID(),
     type: "step.started",
     runId: input.runId,
-    step: input.number,
-    title: input.title,
+    step: input.step.number,
+    title: input.step.title,
+    attempt,
     occurredAt: occurredAt(),
   });
 
-  await delay(stepDelay, input.signal);
-  const detail = await input.operation?.();
+  await delay(stepDelayMs(), input.signal);
 
-  input.emit({
+  let detail: string | undefined;
+  if (input.step.number === 4) {
+    const document = await createDocument({
+      runId: input.runId,
+      title: `Agent result: ${input.prompt.slice(0, 48)}`,
+      content: `Simulated work product for: ${input.prompt}`,
+      idempotencyKey: documentIdempotencyKey(input.runId),
+    });
+    detail = `Created external document ${document.id}`;
+  }
+
+  await updateRun(input.runId, (run) => {
+    const step = run.steps.find((candidate) => candidate.number === input.step.number);
+    if (!step) {
+      throw new Error(`Step ${input.step.number} is missing`);
+    }
+    step.status = "completed";
+    step.completedAt = occurredAt();
+    step.detail = detail ?? null;
+  });
+
+  await emit({
+    id: crypto.randomUUID(),
     type: "step.completed",
     runId: input.runId,
-    step: input.number,
-    title: input.title,
+    step: input.step.number,
+    title: input.step.title,
     detail,
     occurredAt: occurredAt(),
   });
 }
 
-export async function runAgent(input: {
+export async function executeRun(input: {
   runId: string;
-  prompt: string;
+  recovered: boolean;
   signal: AbortSignal;
-  emit: Emit;
 }): Promise<void> {
-  input.emit({
-    type: "run.started",
-    runId: input.runId,
-    prompt: input.prompt,
-    occurredAt: occurredAt(),
-  });
+  const run = await getRun(input.runId);
+  if (!run) {
+    throw new Error(`Run ${input.runId} not found`);
+  }
+  if (run.status === "completed" || run.status === "failed") {
+    return;
+  }
 
-  await executeStep({
-    runId: input.runId,
-    number: 1,
-    title: "Understand the request",
-    signal: input.signal,
-    emit: input.emit,
-  });
-  await delay(stepTransitionDelay, input.signal);
+  if (!run.events.some((event) => event.type === "run.started")) {
+    await emit({
+      id: crypto.randomUUID(),
+      type: "run.started",
+      runId: input.runId,
+      prompt: run.prompt,
+      occurredAt: occurredAt(),
+    });
+  }
 
-  await executeStep({
-    runId: input.runId,
-    number: 2,
-    title: "Search available information",
-    signal: input.signal,
-    emit: input.emit,
-  });
-  await delay(stepTransitionDelay, input.signal);
+  if (input.recovered) {
+    const resumeFrom = firstIncompleteStep(run)?.number ?? AGENT_STEPS.length;
+    await emit({
+      id: crypto.randomUUID(),
+      type: "run.recovered",
+      runId: input.runId,
+      resumeFromStep: resumeFrom,
+      recoveryCount: run.recoveryCount,
+      occurredAt: occurredAt(),
+    });
+  }
 
-  await executeStep({
-    runId: input.runId,
-    number: 3,
-    title: "Prepare a recommendation",
-    signal: input.signal,
-    emit: input.emit,
-  });
-  await delay(stepTransitionDelay, input.signal);
+  for (const definition of AGENT_STEPS) {
+    const latest = await getRun(input.runId);
+    if (!latest) {
+      throw new Error(`Run ${input.runId} not found`);
+    }
+    const step = latest.steps.find((candidate) => candidate.number === definition.number);
+    if (!step) {
+      throw new Error(`Step ${definition.number} is missing`);
+    }
+    if (step.status === "completed") {
+      continue;
+    }
 
-  await executeStep({
-    runId: input.runId,
-    number: 4,
-    title: "Create a document in an external system",
-    signal: input.signal,
-    emit: input.emit,
-    operation: async () => {
-      const document = await createDocument({
-        runId: input.runId,
-        title: `Agent result: ${input.prompt.slice(0, 48)}`,
-        content: `Simulated work product for: ${input.prompt}`,
-      });
-      return `Created external document ${document.id}`;
-    },
-  });
-  await delay(stepTransitionDelay, input.signal);
+    await executeStep({
+      runId: input.runId,
+      prompt: latest.prompt,
+      step,
+      signal: input.signal,
+    });
+    await delay(stepTransitionDelayMs(), input.signal);
+  }
 
-  await executeStep({
-    runId: input.runId,
-    number: 5,
-    title: "Produce the final response",
-    signal: input.signal,
-    emit: input.emit,
+  const result = `The agent completed the task “${run.prompt}” and created a document with its result.`;
+  await updateRun(input.runId, (current) => {
+    current.status = "completed";
+    current.result = result;
+    current.finishedAt = occurredAt();
+    current.lease = null;
+    current.error = null;
   });
-
-  input.emit({
+  await emit({
+    id: crypto.randomUUID(),
     type: "run.completed",
     runId: input.runId,
-    result: `The agent completed the task “${input.prompt}” and created a document with its result.`,
+    result,
+    occurredAt: occurredAt(),
+  });
+}
+
+export async function failRun(runId: string, error: unknown): Promise<void> {
+  if (isAbortError(error)) {
+    return;
+  }
+
+  const message = error instanceof Error ? error.message : "Unknown agent error";
+  await updateRun(runId, (run) => {
+    if (run.status === "completed") {
+      return;
+    }
+    run.status = "failed";
+    run.error = message;
+    run.finishedAt = occurredAt();
+    run.lease = null;
+  });
+  await emit({
+    id: crypto.randomUUID(),
+    type: "run.failed",
+    runId,
+    error: message,
     occurredAt: occurredAt(),
   });
 }

@@ -53,7 +53,24 @@ h1 { font-size: clamp(28px, 5vw, 36px); font-weight: 520; letter-spacing: -.035e
 .status-completed i { background: var(--green); }
 .status-failed { color: var(--red); }
 .status-failed i { background: var(--red); }
+.status-queued { color: #d7c58b; }
+.status-queued i { background: #d7c58b; }
+.status-recovered { color: #9cadff; }
+.status-recovered i { animation: pulse 1.4s ease-in-out infinite; background: var(--blue); }
 @keyframes pulse { 50% { opacity: .35; } }
+
+.recent-runs { border-top: 1px solid var(--border); margin-top: 42px; padding-top: 20px; }
+.run-chips { display: flex; flex-wrap: wrap; gap: 8px; }
+.run-chip { align-items: center; background: rgba(255,255,255,.03); border: 1px solid var(--border); border-radius: 999px; color: var(--secondary); display: inline-flex; font-size: 11px; gap: 7px; max-width: 240px; padding: 6px 10px; }
+.run-chip span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.run-chip-active { background: rgba(94,124,255,.12); border-color: rgba(94,124,255,.28); color: var(--text); }
+.status-dot { border-radius: 50%; display: inline-block; flex: 0 0 6px; height: 6px; width: 6px; }
+.status-dot.status-queued { background: #d7c58b; }
+.status-dot.status-running { background: var(--blue); }
+.status-dot.status-completed { background: var(--green); }
+.status-dot.status-failed { background: var(--red); }
+.recovery-badge { color: #9cadff; display: inline-block; font-size: 10px; margin-top: 6px; }
+.dot-recovered { background: #c9b6ff; }
 
 .quiet-state { color: var(--muted); font-size: 12px; padding: 12px 0; }
 .timeline { display: grid; }

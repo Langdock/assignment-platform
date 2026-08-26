@@ -87,7 +87,22 @@ Open [http://localhost:3000](http://localhost:3000). A normal run takes approxim
 AGENT_STEP_DELAY_MS=5000 pnpm dev
 ```
 
-To observe the starter's failure mode, begin a run and refresh the browser, terminate the development server with `Ctrl+C`, or use the development-only **Simulate process crash** control beside the active run. The crash control intentionally exits the backend process; restart it manually with `pnpm dev`. After restarting, neither the run nor its progress can be recovered. Documents already created in the simulated external system remain visible because they are written beneath `.runtime/`.
+Runs are accepted immediately and executed by a background worker. Refreshing the browser, closing the tab, or restarting the process no longer loses the run.
+
+### Demonstrate recovery
+
+1. Start the app with `pnpm dev` and submit a task.
+2. While steps are still running, refresh the page. The same run, its event log, and live progress come back from the server.
+3. Click **Simulate process crash** (development only) or stop the server with `Ctrl+C` while a run is in progress.
+4. Start the app again with `pnpm dev`.
+5. Refresh if needed. The run is claimed by the new worker, a `run.recovered` event is recorded, and execution resumes at the first incomplete step.
+
+Persisted data lives in `.runtime/`: run records under `.runtime/runs/`, fake external documents in `.runtime/fake-external-actions.json`.
+
+```bash
+pnpm test        # recovery, checkpoint, and idempotency tests
+pnpm typecheck
+```
 
 The crash endpoint is deliberately unavailable when `NODE_ENV=production`. It is local failure-injection tooling, not an application feature.
 
