@@ -87,11 +87,31 @@ Open [http://localhost:3000](http://localhost:3000). A normal run takes approxim
 AGENT_STEP_DELAY_MS=5000 pnpm dev
 ```
 
-To observe the starter's failure mode, begin a run and refresh the browser, terminate the development server with `Ctrl+C`, or use the development-only **Simulate process crash** control beside the active run. The crash control intentionally exits the backend process; restart it manually with `pnpm dev`. After restarting, neither the run nor its progress can be recovered. Documents already created in the simulated external system remain visible because they are written beneath `.runtime/`.
+The solution persists run state beneath `.runtime/`, executes it in a backend worker independent of the request, and reconstructs the UI by polling saved snapshots. See [`DESIGN.md`](./DESIGN.md) for its guarantees and tradeoffs.
+
+### Demonstrate interruption and recovery
+
+1. Start the app with `AGENT_STEP_DELAY_MS=5000 pnpm dev`.
+2. Open the app and start a run. Refresh or close/reopen the tab while steps execute; the saved timeline and active state reappear.
+3. While the run is active, click **Simulate process crash**. Alternatively, stop the server process abruptly.
+4. Restart it with `AGENT_STEP_DELAY_MS=5000 pnpm dev`.
+5. Open or refresh the app. Startup recovery records a recovery event, keeps completed checkpoints, reruns the interrupted step, and finishes the run.
+6. If the interruption happened around the external-document step, inspect **Fake external system**: its stable idempotency key prevents a replay from creating a second document.
 
 The crash endpoint is deliberately unavailable when `NODE_ENV=production`. It is local failure-injection tooling, not an application feature.
 
-The starter architecture is described in [`docs/STARTER_ARCHITECTURE.md`](./docs/STARTER_ARCHITECTURE.md).
+### Verification
+
+```bash
+pnpm test
+pnpm typecheck
+pnpm lint
+pnpm build
+```
+
+The tests cover durable acceptance, checkpoint recovery, side-effect idempotency, retry exhaustion, and explicit terminal failure. To reset all local prototype state, stop the app and remove `.runtime/`.
+
+The original starter architecture is described in [`docs/STARTER_ARCHITECTURE.md`](./docs/STARTER_ARCHITECTURE.md).
 
 ## Scope and expectations
 

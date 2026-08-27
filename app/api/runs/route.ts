@@ -1,11 +1,15 @@
-import { runAgent } from "@/lib/agent";
-import type { AgentEvent } from "@/lib/types";
+import { createRun, listRuns } from "@/lib/run-store";
+import { ensureRunWorker } from "@/lib/run-worker";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
 
-function serialize(event: AgentEvent): Uint8Array {
-  return new TextEncoder().encode(`data: ${JSON.stringify(event)}\n\n`);
+export async function GET(): Promise<Response> {
+  await ensureRunWorker();
+  return Response.json(
+    { runs: await listRuns() },
+    { headers: { "Cache-Control": "no-store" } },
+  );
 }
 
 export async function POST(request: Request): Promise<Response> {
@@ -16,31 +20,16 @@ export async function POST(request: Request): Promise<Response> {
     return Response.json({ error: "A prompt is required." }, { status: 400 });
   }
 
-  const runId = crypto.randomUUID();
-  const stream = new ReadableStream<Uint8Array>({
-    start(controller) {
-      const emit = (event: AgentEvent) => controller.enqueue(serialize(event));
+  // Persist acceptance before replying. From this point the run is discoverable
+  // and restart recovery can execute it even if this request is disconnected.
+  const run = await createRun(prompt);
+  await ensureRunWorker();
 
-      void runAgent({ runId, prompt, signal: request.signal, emit })
-        .catch((error: unknown) => {
-          if (!request.signal.aborted) {
-            emit({
-              type: "run.failed",
-              runId,
-              error: error instanceof Error ? error.message : "Unknown agent error",
-              occurredAt: new Date().toISOString(),
-            });
-          }
-        })
-        .finally(() => controller.close());
-    },
-  });
-
-  return new Response(stream, {
+  return Response.json({ run }, {
+    status: 202,
     headers: {
-      "Cache-Control": "no-cache, no-transform",
-      Connection: "keep-alive",
-      "Content-Type": "text/event-stream; charset=utf-8",
+      "Cache-Control": "no-store",
+      Location: `/api/runs/${run.id}`,
     },
   });
 }

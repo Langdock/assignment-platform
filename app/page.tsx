@@ -1,101 +1,131 @@
 "use client";
 
-import { FormEvent, useCallback, useEffect, useRef, useState } from "react";
-import type { AgentEvent, ExternalAction } from "@/lib/types";
+import { FormEvent, useCallback, useEffect, useState } from "react";
+import type { AgentEvent, AgentRun, ExternalAction, RunStatus, RunSummary } from "@/lib/types";
 
 const defaultPrompt = "Research the most important considerations for adopting an enterprise AI assistant.";
 
 function eventLabel(event: AgentEvent): string {
   switch (event.type) {
+    case "run.accepted":
+      return "Run durably accepted";
     case "run.started":
-      return "Run accepted by the API";
+      return `Execution started (attempt ${event.attempt})`;
+    case "run.resumed":
+      return `Execution resumed (attempt ${event.attempt})`;
+    case "run.recovered":
+      return event.detail;
     case "step.started":
-      return event.title;
+      return `${event.title} (attempt ${event.attempt})`;
     case "step.completed":
       return event.detail ?? `${event.title} completed`;
+    case "step.retrying":
+      return `${event.title} will retry: ${event.error}`;
+    case "step.failed":
+      return `${event.title} failed: ${event.error}`;
     case "run.completed":
       return "Run completed";
     case "run.failed":
-      return event.error;
+      return `Run failed: ${event.error}`;
   }
+}
+
+function statusLabel(status?: RunStatus): string {
+  return status ? `${status[0].toUpperCase()}${status.slice(1)}` : "Ready";
 }
 
 export default function Home() {
   const [prompt, setPrompt] = useState(defaultPrompt);
-  const [events, setEvents] = useState<AgentEvent[]>([]);
+  const [runs, setRuns] = useState<RunSummary[]>([]);
+  const [selectedRunId, setSelectedRunId] = useState<string | null>(null);
+  const [run, setRun] = useState<AgentRun | null>(null);
   const [documents, setDocuments] = useState<ExternalAction[]>([]);
-  const [running, setRunning] = useState(false);
+  const [submitting, setSubmitting] = useState(false);
   const [requestError, setRequestError] = useState<string | null>(null);
-  const abortController = useRef<AbortController | null>(null);
 
   const loadDocuments = useCallback(async () => {
     const response = await fetch("/api/fake-tools/documents", { cache: "no-store" });
-    if (response.ok) {
-      const body = (await response.json()) as { documents: ExternalAction[] };
-      setDocuments(body.documents);
-    }
+    if (!response.ok) throw new Error("Could not load external documents.");
+    const body = (await response.json()) as { documents: ExternalAction[] };
+    setDocuments(body.documents);
+  }, []);
+
+  const loadRuns = useCallback(async () => {
+    const response = await fetch("/api/runs", { cache: "no-store" });
+    if (!response.ok) throw new Error("Could not load runs.");
+    const body = (await response.json()) as { runs: RunSummary[] };
+    setRuns(body.runs);
+    setSelectedRunId((current) => current ?? body.runs[0]?.id ?? null);
+  }, []);
+
+  const loadRun = useCallback(async (runId: string) => {
+    const response = await fetch(`/api/runs/${runId}`, { cache: "no-store" });
+    if (!response.ok) throw new Error("Could not load the selected run.");
+    const body = (await response.json()) as { run: AgentRun };
+    setRun(body.run);
   }, []);
 
   useEffect(() => {
-    const loadInitialDocuments = async () => {
-      await loadDocuments();
+    const timeout = window.setTimeout(() => {
+      void Promise.all([loadRuns(), loadDocuments()]).catch((error: unknown) => {
+        setRequestError(error instanceof Error ? error.message : "Could not load saved state.");
+      });
+    }, 0);
+    return () => window.clearTimeout(timeout);
+  }, [loadDocuments, loadRuns]);
+
+  useEffect(() => {
+    if (!selectedRunId) return;
+
+    let active = true;
+    const refresh = async () => {
+      try {
+        await Promise.all([loadRun(selectedRunId), loadRuns(), loadDocuments()]);
+        if (active) setRequestError(null);
+      } catch (error) {
+        if (active) {
+          setRequestError(
+            error instanceof Error
+              ? `${error.message} The backend may be restarting.`
+              : "The backend may be restarting.",
+          );
+        }
+      }
     };
 
-    void loadInitialDocuments();
-    return () => abortController.current?.abort();
-  }, [loadDocuments]);
+    void refresh();
+    const interval = window.setInterval(() => void refresh(), 1_000);
+    return () => {
+      active = false;
+      window.clearInterval(interval);
+    };
+  }, [loadDocuments, loadRun, loadRuns, selectedRunId]);
 
   async function startRun(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
-    if (!prompt.trim() || running) return;
+    if (!prompt.trim() || submitting) return;
 
-    const controller = new AbortController();
-    abortController.current = controller;
-    setEvents([]);
     setRequestError(null);
-    setRunning(true);
-
+    setSubmitting(true);
     try {
       const response = await fetch("/api/runs", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ prompt }),
-        signal: controller.signal,
       });
-
-      if (!response.ok || !response.body) {
-        throw new Error(`The run request failed with status ${response.status}.`);
+      if (!response.ok) {
+        const body = (await response.json().catch(() => null)) as { error?: string } | null;
+        throw new Error(body?.error ?? `The run request failed with status ${response.status}.`);
       }
 
-      const reader = response.body.getReader();
-      const decoder = new TextDecoder();
-      let buffer = "";
-
-      while (true) {
-        const { value, done } = await reader.read();
-        if (done) break;
-        buffer += decoder.decode(value, { stream: true });
-
-        const messages = buffer.split("\n\n");
-        buffer = messages.pop() ?? "";
-        for (const message of messages) {
-          const data = message
-            .split("\n")
-            .find((line) => line.startsWith("data: "))
-            ?.slice(6);
-          if (data) {
-            setEvents((current) => [...current, JSON.parse(data) as AgentEvent]);
-          }
-        }
-      }
+      const body = (await response.json()) as { run: AgentRun };
+      setRun(body.run);
+      setSelectedRunId(body.run.id);
+      await loadRuns();
     } catch (error) {
-      if (!controller.signal.aborted) {
-        setRequestError(error instanceof Error ? error.message : "The run was interrupted.");
-      }
+      setRequestError(error instanceof Error ? error.message : "The run could not be accepted.");
     } finally {
-      setRunning(false);
-      abortController.current = null;
-      void loadDocuments();
+      setSubmitting(false);
     }
   }
 
@@ -105,18 +135,15 @@ export default function Home() {
   }
 
   async function terminateBackend() {
-    setRequestError("Backend termination requested. Restart it with pnpm dev to continue testing.");
+    setRequestError("Backend termination requested. Restart it with pnpm dev; this run will recover.");
     try {
       await fetch("/api/debug/crash", { method: "POST" });
     } catch {
-      // The request may fail because the endpoint intentionally terminates its own process.
+      // The endpoint intentionally terminates its own process before the request settles.
     }
   }
 
-  const runId = events[0]?.runId;
-  const completed = events.find((event) => event.type === "run.completed");
-  const failed = events.find((event) => event.type === "run.failed");
-  const statusLabel = running ? "Running" : completed ? "Completed" : failed ? "Failed" : "Ready";
+  const active = run?.status === "queued" || run?.status === "running";
 
   return (
     <main className="app-shell">
@@ -127,43 +154,65 @@ export default function Home() {
           <label className="sr-only" htmlFor="prompt">Agent task</label>
           <textarea id="prompt" value={prompt} onChange={(event) => setPrompt(event.target.value)} placeholder="Give the agent a task…" rows={3} />
           <div className="composer-footer">
-            <span>5 simulated steps · about 15 seconds</span>
-            <button aria-label="Start agent run" disabled={running || !prompt.trim()} type="submit">
-              {running ? <span className="spinner" /> : <span aria-hidden="true">↑</span>}
+            <span>5 durable steps · safe to disconnect</span>
+            <button aria-label="Start agent run" disabled={submitting || !prompt.trim()} type="submit">
+              {submitting ? <span className="spinner" /> : <span aria-hidden="true">↑</span>}
             </button>
           </div>
         </form>
-        <p className="connection-note">This starter keeps the run inside one HTTP request. Refreshing the page loses its progress.</p>
+        <p className="connection-note">Runs are persisted before acceptance and continue without this browser connection.</p>
       </section>
 
       <section className="activity" aria-live="polite">
         <div className="section-heading">
-          <div><span className="section-label">Current run</span>{runId && <code>{runId}</code>}</div>
+          <div><span className="section-label">Selected run</span>{run && <code>{run.id}</code>}</div>
           <div className="run-controls">
-            {process.env.NODE_ENV === "development" && running && (
+            {process.env.NODE_ENV === "development" && active && (
               <button className="crash-button" onClick={terminateBackend} type="button">Simulate process crash</button>
             )}
-            <span className={`status status-${statusLabel.toLowerCase()}`}><i aria-hidden="true" />{statusLabel}</span>
+            <span className={`status status-${run?.status ?? "ready"}`}><i aria-hidden="true" />{statusLabel(run?.status)}</span>
           </div>
         </div>
-        {events.length === 0 ? <div className="quiet-state">Run activity will appear here.</div> : (
-          <div className="timeline">
-            {events.map((event, index) => (
-              <div className="timeline-row" key={`${event.type}-${event.occurredAt}-${index}`}>
-                <span className={`timeline-dot ${event.type.endsWith("completed") ? "dot-complete" : ""}`} />
-                <strong>{eventLabel(event)}</strong>
-                <time>{new Date(event.occurredAt).toLocaleTimeString()}</time>
-              </div>
+        {!run ? <div className="quiet-state">Start a run or select one from run history.</div> : (
+          <>
+            <div className="progress-summary">
+              <span>{run.steps.filter((step) => step.status === "completed").length} / {run.steps.length} steps complete</span>
+              <span>Execution attempt {run.attempts || "—"}</span>
+            </div>
+            <div className="timeline">
+              {run.events.map((event) => (
+                <div className="timeline-row" key={event.sequence}>
+                  <span className={`timeline-dot ${event.type.endsWith("completed") ? "dot-complete" : event.type.endsWith("failed") ? "dot-failed" : ""}`} />
+                  <strong>{eventLabel(event)}</strong>
+                  <time>{new Date(event.occurredAt).toLocaleTimeString()}</time>
+                </div>
+              ))}
+            </div>
+          </>
+        )}
+        {requestError && <p className="error-message">{requestError}</p>}
+        {run?.result && <div className="result">{run.result}</div>}
+      </section>
+
+      <section className="run-history">
+        <div className="section-heading">
+          <div><span className="section-label">Run history</span><p>Persisted runs remain inspectable after refreshes and restarts.</p></div>
+        </div>
+        {runs.length === 0 ? <div className="quiet-state">No accepted runs yet.</div> : (
+          <div className="run-list">
+            {runs.map((savedRun) => (
+              <button className={savedRun.id === selectedRunId ? "selected" : ""} key={savedRun.id} onClick={() => setSelectedRunId(savedRun.id)} type="button">
+                <span><strong>{savedRun.prompt}</strong><small>{savedRun.completedSteps}/{savedRun.totalSteps} steps · {new Date(savedRun.createdAt).toLocaleString()}</small></span>
+                <em className={`status-${savedRun.status}`}>{statusLabel(savedRun.status)}</em>
+              </button>
             ))}
           </div>
         )}
-        {requestError && <p className="error-message">{requestError}</p>}
-        {completed?.type === "run.completed" && <div className="result">{completed.result}</div>}
       </section>
 
       <section className="external-system">
         <div className="section-heading">
-          <div><span className="section-label">Fake external system</span><p>Documents persist across application restarts and have no idempotency protection.</p></div>
+          <div><span className="section-label">Fake external system</span><p>Documents persist across restarts; each run uses an idempotency key to prevent replay duplicates.</p></div>
           {documents.length > 0 && <button className="text-button" onClick={resetDocuments} type="button">Reset</button>}
         </div>
         {documents.length === 0 ? <div className="quiet-state">No documents created.</div> : (
