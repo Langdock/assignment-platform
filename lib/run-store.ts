@@ -36,7 +36,9 @@ function clone<T>(value: T): T {
 
 async function readStore(): Promise<Store> {
   try {
-    const parsed = JSON.parse(await readFile(storeFile(), "utf8")) as Store;
+    const parsed = JSON.parse(
+      await readFile(/* turbopackIgnore: true */ storeFile(), "utf8"),
+    ) as Store;
     if (parsed.version !== 1 || !Array.isArray(parsed.runs)) {
       throw new Error("The agent run store has an unsupported format.");
     }

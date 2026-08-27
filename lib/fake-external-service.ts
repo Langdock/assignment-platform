@@ -33,7 +33,9 @@ async function withServiceLock<T>(operation: () => Promise<T>): Promise<T> {
 
 async function readActions(): Promise<ExternalAction[]> {
   try {
-    return JSON.parse(await readFile(actionsFile(), "utf8")) as ExternalAction[];
+    return JSON.parse(
+      await readFile(/* turbopackIgnore: true */ actionsFile(), "utf8"),
+    ) as ExternalAction[];
   } catch (error) {
     if ((error as NodeJS.ErrnoException).code === "ENOENT") {
       return [];
