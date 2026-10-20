@@ -84,6 +84,12 @@ pnpm dev
 
 Open [http://localhost:3000](http://localhost:3000). A normal run takes approximately 15 seconds.
 
+To check compatibility after dependency changes, run `pnpm lint`, `pnpm typecheck`,
+`pnpm build`, and `pnpm test:smoke`. The smoke check starts and stops its own
+production server on a local ephemeral port. It checks rendering, prompt validation,
+streaming a completed run, its simulated document, and the production crash guard.
+It writes a simulated document under `.runtime/`; run it in a disposable checkout.
+
 The timing can be changed during development:
 
 ```bash
